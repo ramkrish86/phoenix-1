@@ -64,6 +64,7 @@ import static org.apache.phoenix.query.QueryServicesOptions.DEFAULT_DROP_METADAT
 import static org.apache.phoenix.schema.PDataType.VARCHAR;
 
 import java.io.IOException;
+import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -1497,7 +1498,8 @@ public class MetaDataClient {
         return dropTable(schemaName, tableName, parentTableName, PTableType.INDEX, statement.ifExists(), false);
     }
 
-    private MutationState dropTable(String schemaName, String tableName, String parentTableName, PTableType tableType, boolean ifExists, boolean cascade) throws SQLException {
+    private MutationState dropTable(String schemaName, String tableName, String parentTableName, PTableType tableType,
+            boolean ifExists, boolean cascade) throws SQLException {
         connection.rollback();
         boolean wasAutoCommit = connection.getAutoCommit();
         try {
@@ -1522,77 +1524,115 @@ public class MetaDataClient {
 
             MetaDataMutationResult result = connection.getQueryServices().dropTable(tableMetaData, tableType, cascade);
             MutationCode code = result.getMutationCode();
-            switch(code) {
-                case TABLE_NOT_FOUND:
-                    if (!ifExists) {
-                        throw new TableNotFoundException(schemaName, tableName);
-                    }
-                    break;
-                case NEWER_TABLE_FOUND:
-                    throw new NewerTableAlreadyExistsException(schemaName, tableName);
-                case UNALLOWED_TABLE_MUTATION:
-                    throw new SQLExceptionInfo.Builder(SQLExceptionCode.CANNOT_MUTATE_TABLE)
-                        .setSchemaName(schemaName).setTableName(tableName).build().buildException();
-                default:
-                    connection.removeTable(tenantId, SchemaUtil.getTableName(schemaName, tableName), parentTableName, result.getMutationTime());
-                                        
-                    if (result.getTable() != null && tableType != PTableType.VIEW) {
-                        connection.setAutoCommit(true);
-                        PTable table = result.getTable();
-                        boolean dropMetaData = result.getTable().getViewIndexId() == null && 
-                                connection.getQueryServices().getProps().getBoolean(DROP_METADATA_ATTRIB, DEFAULT_DROP_METADATA);
-                        long ts = (scn == null ? result.getMutationTime() : scn);
-                        // Create empty table and schema - they're only used to get the name from
-                        // PName name, PTableType type, long timeStamp, long sequenceNumber, List<PColumn> columns
-                        List<TableRef> tableRefs = Lists.newArrayListWithExpectedSize(2 + table.getIndexes().size());
-                        // All multi-tenant tables have a view index table, so no need to check in that case
-                        if (tableType == PTableType.TABLE && (table.isMultiTenant() || hasViewIndexTable || hasLocalIndexTable)) {
-                            MetaDataUtil.deleteViewIndexSequences(connection, table.getPhysicalName());
-                            // TODO: consider removing this, as the DROP INDEX done for each DROP VIEW command
-                            // would have deleted all the rows already
-                            if (!dropMetaData) {
-                                if (hasViewIndexTable) {
-                                    String viewIndexSchemaName = null;
-                                    String viewIndexTableName = null;
-                                    if(schemaName != null) {
-                                        viewIndexSchemaName = MetaDataUtil.getViewIndexTableName(schemaName);
-                                        viewIndexTableName = tableName;
-                                    } else {
-                                        viewIndexTableName = MetaDataUtil.getViewIndexTableName(tableName);
-                                    }
-                                    PTable viewIndexTable = new PTableImpl(null, viewIndexSchemaName, viewIndexTableName, ts, table.getColumnFamilies());
-                                    tableRefs.add(new TableRef(null, viewIndexTable, ts, false));
-                                } 
-                                if (hasLocalIndexTable) {
-                                    String localIndexSchemaName = null;
-                                    String localIndexTableName = null;
-                                    if(schemaName != null) {
-                                        localIndexSchemaName = MetaDataUtil.getLocalIndexTableName(schemaName);
-                                        localIndexTableName = tableName;
-                                    } else {
-                                        localIndexTableName = MetaDataUtil.getLocalIndexTableName(tableName);
-                                    }
-                                    PTable localIndexTable = new PTableImpl(null, localIndexSchemaName, localIndexTableName, ts, Collections.<PColumnFamily>emptyList());
-                                    tableRefs.add(new TableRef(null, localIndexTable, ts, false));
-                                }
+            switch (code) {
+            case TABLE_NOT_FOUND:
+                if (!ifExists) { throw new TableNotFoundException(schemaName, tableName); }
+                break;
+            case NEWER_TABLE_FOUND:
+                throw new NewerTableAlreadyExistsException(schemaName, tableName);
+            case UNALLOWED_TABLE_MUTATION:
+                throw new SQLExceptionInfo.Builder(SQLExceptionCode.CANNOT_MUTATE_TABLE)
+
+                .setSchemaName(schemaName).setTableName(tableName).build().buildException();
+            default:
+                connection.removeTable(tenantId, SchemaUtil.getTableName(schemaName, tableName), parentTableName,
+                        result.getMutationTime());
+
+                if (result.getTable() != null && tableType != PTableType.VIEW) {
+                    connection.setAutoCommit(true);
+                    PTable table = result.getTable();
+                    boolean dropMetaData = result.getTable().getViewIndexId() == null &&
+
+                    connection.getQueryServices().getProps().getBoolean(DROP_METADATA_ATTRIB, DEFAULT_DROP_METADATA);
+                    long ts = (scn == null ? result.getMutationTime() : scn);
+                    // Create empty table and schema - they're only used to get the name from
+                    // PName name, PTableType type, long timeStamp, long sequenceNumber, List<PColumn> columns
+                    List<TableRef> tableRefs = Lists.newArrayListWithExpectedSize(2 + table.getIndexes().size());
+                    // All multi-tenant tables have a view index table, so no need to check in that case
+                    if (tableType == PTableType.TABLE
+                            && (table.isMultiTenant() || hasViewIndexTable || hasLocalIndexTable)) {
+
+                        MetaDataUtil.deleteViewIndexSequences(connection, table.getPhysicalName());
+                        if (hasViewIndexTable) {
+                            String viewIndexSchemaName = null;
+                            String viewIndexTableName = null;
+                            if (schemaName != null) {
+                                viewIndexSchemaName = MetaDataUtil.getViewIndexTableName(schemaName);
+                                viewIndexTableName = tableName;
+                            } else {
+                                viewIndexTableName = MetaDataUtil.getViewIndexTableName(tableName);
                             }
+                            PTable viewIndexTable = new PTableImpl(null, viewIndexSchemaName, viewIndexTableName, ts,
+                                    table.getColumnFamilies());
+                            tableRefs.add(new TableRef(null, viewIndexTable, ts, false));
                         }
-                        if (!dropMetaData) {
-                            // Delete everything in the column. You'll still be able to do queries at earlier timestamps
-                            tableRefs.add(new TableRef(null, table, ts, false));
-                            // TODO: Let the standard mutable secondary index maintenance handle this?
-                            for (PTable index: table.getIndexes()) {
-                                tableRefs.add(new TableRef(null, index, ts, false));
+                        if (hasLocalIndexTable) {
+                            String localIndexSchemaName = null;
+                            String localIndexTableName = null;
+                            if (schemaName != null) {
+                                localIndexSchemaName = MetaDataUtil.getLocalIndexTableName(schemaName);
+                                localIndexTableName = tableName;
+                            } else {
+                                localIndexTableName = MetaDataUtil.getLocalIndexTableName(tableName);
                             }
-                            MutationPlan plan = new PostDDLCompiler(connection).compile(tableRefs, null, null, Collections.<PColumn>emptyList(), ts);
-                            return connection.getQueryServices().updateData(plan);
+                            PTable localIndexTable = new PTableImpl(null, localIndexSchemaName, localIndexTableName,
+                                    ts, Collections.<PColumnFamily> emptyList());
+                            tableRefs.add(new TableRef(null, localIndexTable, ts, false));
                         }
                     }
-                    break;
+                    tableRefs.add(new TableRef(null, table, ts, false));
+                    // TODO: Let the standard mutable secondary index maintenance handle this?
+                    for (PTable index : table.getIndexes()) {
+                        tableRefs.add(new TableRef(null, index, ts, false));
+                    }
+                    deleteFromStatsTable(tableRefs, ts);
+                    if (!dropMetaData) {
+                        MutationPlan plan = new PostDDLCompiler(connection).compile(tableRefs, null, null,
+                                Collections.<PColumn> emptyList(), ts);
+                        // Delete everything in the column. You'll still be able to do queries at earlier timestamps
+                        return connection.getQueryServices().updateData(plan);
+                    }
                 }
-                 return new MutationState(0,connection);
+                break;
+            }
+            return new MutationState(0, connection);
         } finally {
             connection.setAutoCommit(wasAutoCommit);
+        }
+    }
+
+    private void deleteFromStatsTable(List<TableRef> tableRefs, long ts) throws SQLException {
+        Properties props = new Properties(connection.getClientInfo());
+        props.setProperty(PhoenixRuntime.CURRENT_SCN_ATTRIB, Long.toString(ts));
+        Connection conn = DriverManager.getConnection(connection.getURL(), props);
+        conn.setAutoCommit(true);
+        boolean success = false;
+        SQLException sqlException = null;
+        try {
+            StringBuilder buf = new StringBuilder("DELETE FROM SYSTEM.STATS WHERE PHYSICAL_NAME IN (");
+            for (TableRef ref : tableRefs) {
+                buf.append("'" + ref.getTable().getName().getString() + "',");
+            }
+            buf.setCharAt(buf.length() - 1, ')');
+            conn.createStatement().execute(buf.toString());
+            success = true;
+        } catch (SQLException e) {
+            sqlException = e;
+        } finally {
+            try {
+                conn.close();
+            } catch (SQLException e) {
+                if (sqlException == null) {
+                    // If we're not in the middle of throwing another exception
+                    // then throw the exception we got on close.
+                    if (success) {
+                        sqlException = e;
+                    }
+                } else {
+                    sqlException.setNextException(e);
+                }
+            }
+            if (sqlException != null) { throw sqlException; }
         }
     }
 
