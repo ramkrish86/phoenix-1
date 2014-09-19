@@ -144,6 +144,7 @@ public class DefaultParallelIteratorRegionSplitter implements ParallelIteratorRe
         // Merge bisect with guideposts for all but the last region
         while (regionIndex < regionSize) {
             byte[] currentGuidePost;
+            currentKey = regions.get(regionIndex).getRegionInfo().getStartKey();
             endKey = regions.get(regionIndex++).getRegionInfo().getEndKey();
             while (guideIndex < gpsSize
                     && (Bytes.compareTo(currentGuidePost = gps.get(guideIndex), endKey) <= 0 || endKey.length == 0)) {
@@ -157,9 +158,6 @@ public class DefaultParallelIteratorRegionSplitter implements ParallelIteratorRe
             KeyRange keyRange = KeyRange.getKeyRange(currentKey, endKey);
             if (keyRange != KeyRange.EMPTY_RANGE) {
                 guidePosts.add(keyRange);
-            }
-            if (regionIndex < regionSize) {
-                currentKey = regions.get(regionIndex).getRegionInfo().getStartKey();
             }
         }
         if (logger.isDebugEnabled()) {
