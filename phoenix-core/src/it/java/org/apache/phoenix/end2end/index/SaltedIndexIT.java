@@ -123,6 +123,9 @@ public class SaltedIndexIT extends BaseIndexIT {
         conn.commit();
         stmt = conn.prepareStatement("ANALYZE "+DATA_TABLE_FULL_NAME);
         stmt.execute();
+      /*  stmt = conn.prepareStatement("ANALYZE "+INDEX_TABLE_FULL_NAME);
+        stmt.execute();*/
+
         query = "SELECT * FROM " + INDEX_TABLE_FULL_NAME;
         rs = conn.createStatement().executeQuery(query);
         assertTrue(rs.next());
@@ -208,9 +211,9 @@ public class SaltedIndexIT extends BaseIndexIT {
                  "CLIENT MERGE SORT\n" + 
                  "CLIENT 2 ROW LIMIT";
         String explainPlan = QueryUtil.getExplainPlan(rs);
-        if (explainPlan.contains("6-WAY")) {
+        if (explainPlan.contains("4-WAY")) {
             // TODO : refactor the testcase to do this better
-            expectedPlan = "CLIENT PARALLEL 6-WAY FULL SCAN OVER " + DATA_TABLE_FULL_NAME + "\n"
+            expectedPlan = "CLIENT PARALLEL 4-WAY FULL SCAN OVER " + DATA_TABLE_FULL_NAME + "\n"
                     + "    SERVER FILTER BY V >= 'x'\n" + "    SERVER 2 ROW LIMIT\n" + "CLIENT MERGE SORT\n" + "CLIENT 2 ROW LIMIT";
 
         }

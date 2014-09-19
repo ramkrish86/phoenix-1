@@ -734,7 +734,10 @@ public class MetaDataEndpointImpl extends MetaDataProtocol implements Coprocesso
                         PhoenixArray array = (PhoenixArray)PDataType.VARBINARY_ARRAY.toObject(guidePostVal);
                         if (array != null && array.getDimensions() != 0) {
                             for (int j = 0; j < array.getDimensions(); j++) {
-                                guidePosts.add(array.toBytes(j));
+                                byte[] gp = array.toBytes(j);
+                                if (gp.length != 0) {
+                                    guidePosts.add(gp);
+                                }
                             }
                         }
                     }
